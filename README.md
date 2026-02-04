@@ -1,43 +1,73 @@
 # GitGate
 
-A secure GitHub Releases proxy service with device authentication, caching, and audit logging.
+Authenticated GitHub Releases proxy with intelligent caching, device verification, and cryptographic signing for secure software distribution in managed environments.
+
+## Overview
+
+GitGate acts as a gatekeeper between your managed devices and GitHub Releases, providing enterprise-grade authentication, caching, and audit logging. It reduces GitHub API consumption through intelligent caching while ensuring only verified devices can access software artifacts. Designed for organizations using MDM solutions or zero-trust networks who need controlled access to GitHub-hosted binaries.
 
 ## Features
 
-- **GitHub Releases Proxy**: Proxy access to GitHub releases and assets
-- **Device Authentication**: Support for multiple auth methods:
-  - Jamf API (macOS device management)
-  - Tailscale (VPN-based device identity)
-  - mTLS (mutual TLS certificates)
-  - None (open access)
-- **Local Caching**: SHA-256 checksummed asset caching with TTL
-- **Asset Signing**: Optional RSA-SHA256 signing of downloaded assets
-- **Rate Limiting**: Per-device rate limiting (60 requests/minute)
-- **Audit Logging**: JSON-formatted audit logs of all access
+- **Multi-Method Authentication**: Jamf Pro, Tailscale, mTLS, or open access modes
+- **Intelligent Caching**: Configurable TTL-based caching for releases and assets with SHA256 checksums
+- **Cryptographic Signing**: Optional RSA signature generation for downloaded assets
+- **Rate Limiting**: Per-device request throttling to prevent abuse
+- **Comprehensive Auditing**: Structured JSON logging of all access attempts and downloads
+- **GitHub API Efficiency**: Reduces upstream API calls through aggressive caching
+- **High Performance**: Built on Bun runtime with Hono framework for minimal latency
 
 ## Installation
 
 ```bash
+# From source
+git clone https://github.com/yourusername/gitgate.git
+cd gitgate
 bun install
+bun run build
+
+# Run directly
+bun run dev
+
+# Production deployment
+bun run start
 ```
+
+Requires Bun 1.0.0 or later.
+
+## Usage
+
+```bash
+# List all releases for a repository
+curl https://your-gitgate-instance/releases/owner/repo
+
+# Download a specific asset
+curl https://your-gitgate-instance/release/owner/repo/v1.0.0/binary.tar.gz \
+  -H "X-Device-ID: your-device-id" \
+  -o binary.tar.gz
+
+# Verify signature (when signing is enabled)
+openssl dgst -sha256 -verify public.pem -signature asset.sig binary.tar.gz
+```
+
+Assets include SHA256 checksums in `X-Checksum-SHA256` headers. When signing is enabled, RSA signatures are provided in `X-Signature-RSA-SHA256` headers.
 
 ## Configuration
 
-Copy `config.example.json` to `config.json` and update with your settings:
+Create `config.json` based on `config.example.json`:
 
 ```json
 {
   "port": 3000,
   "host": "0.0.0.0",
   "github": {
-    "token": "ghp_your_fine_grained_pat",
+    "token": "ghp_your_fine_grained_pat_here",
     "cache_dir": "./cache",
     "cache_ttl_seconds": 3600
   },
   "auth": {
     "method": "jamf",
     "jamf": {
-      "api_url": "https://your-jamf-instance.jamfcloud.com",
+      "api_url": "https://your-instance.jamfcloud.com",
       "api_key": "your_api_key",
       "api_secret": "your_api_secret"
     }
@@ -53,108 +83,60 @@ Copy `config.example.json` to `config.json` and update with your settings:
 }
 ```
 
-## Running
+### Authentication Methods
 
-Development mode with auto-reload:
+- **jamf**: Validates devices against Jamf Pro inventory via API
+- **tailscale**: Authenticates using Tailscale network identity
+- **mtls**: Mutual TLS with client certificate verification
+- **none**: Open access for development or internal networks
 
-```bash
-bun run dev
-```
+### GitHub Token Requirements
 
-Production build:
+Generate a fine-grained personal access token with:
+- Read access to repository contents
+- Read access to releases
 
-```bash
-bun run build
-bun run start
-```
-
-Type checking:
-
-```bash
-bun run lint
-```
-
-## API Endpoints
-
-### Health Check
-
-```
-GET /health
-```
-
-Returns service status.
-
-### List Releases
-
-```
-GET /releases/:owner/:repo
-```
-
-Lists all releases for a repository. Requires device authentication.
-
-### Download Asset
-
-```
-GET /release/:owner/:repo/:version/:asset
-```
-
-Downloads a specific asset from a release. Requires device authentication.
-
-Response headers:
-
-- `X-Checksum-SHA256`: SHA-256 checksum of the asset
-- `X-Signature-RSA-SHA256`: RSA-SHA256 signature (if signing enabled)
-
-## Authentication Methods
-
-### Jamf
-
-Requires `X-Jamf-Token` header with valid Jamf API token.
-
-### Tailscale
-
-Requires Tailscale headers:
-
-- `X-Tailscale-User`: User ID
-- `X-Tailscale-Device`: Device ID
-- `X-Tailscale-IP`: Device IP (optional)
-
-### mTLS
-
-Requires valid client certificate signed by configured CA.
-
-### None
-
-No authentication required (open access).
-
-## Audit Logging
-
-Audit logs are written to the configured log file in JSON format:
-
-```json
-{
-  "timestamp": 1234567890,
-  "device_id": "device-123",
-  "action": "download_asset",
-  "resource": "owner/repo/v1.0.0/app.zip",
-  "status": "success",
-  "details": {
-    "cached": true
-  }
-}
-```
+Public repositories require no special permissions.
 
 ## Architecture
 
-- `src/types.ts`: Type definitions
-- `src/config.ts`: Configuration loading and validation
-- `src/auth/`: Authentication modules (Jamf, Tailscale, mTLS)
-- `src/github/`: GitHub API client, caching, and signing
-- `src/audit/`: Audit logging
-- `src/middleware/`: Rate limiting
-- `src/server.ts`: HTTP server and route handlers
-- `src/index.ts`: Entry point
+- `config.ts`: Configuration loading and validation
+- `server.ts`: Hono application setup and route handlers
+- `auth/`: Authentication adapters for each method
+  - `jamf.ts`: Jamf Pro API integration
+  - `tailscale.ts`: Tailscale identity verification
+  - `mtls.ts`: Client certificate validation
+- `github/`: GitHub API interaction layer
+  - `client.ts`: Octokit wrapper for releases and assets
+  - `cache.ts`: File-based caching with checksums
+  - `signing.ts`: RSA signature generation
+- `audit/logger.ts`: Structured audit log writer
+- `middleware/ratelimit.ts`: Per-device rate limiter
+
+Request flow: Authentication → Rate Limit → Cache Check → GitHub Fetch → Cache Store → Sign → Audit → Response
+
+## Development
+
+```bash
+bun install
+bun run dev
+bun run lint
+bun run type-check
+```
+
+The dev server watches for changes and automatically restarts. All code is TypeScript with strict type checking.
+
+Key dependencies: Hono (web framework), Octokit (GitHub API client), native Bun APIs for crypto and filesystem operations.
+
+## Security Considerations
+
+- Store GitHub tokens securely with minimal required permissions
+- Use authentication methods appropriate for your threat model
+- Enable signing for cryptographic verification of downloaded assets
+- Review audit logs regularly for anomalous access patterns
+- Run behind TLS termination in production
+- Rotate API keys and certificates periodically
 
 ## License
 
-MIT
+MIT License
