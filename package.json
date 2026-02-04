@@ -1,0 +1,25 @@
+{
+  "name": "gitgate",
+  "version": "1.0.0",
+  "description": "GitHub Releases proxy with device authentication and caching",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "build": "bun build src/index.ts --outdir dist --target bun",
+    "start": "bun dist/index.js",
+    "lint": "bunx tsc --noEmit",
+    "type-check": "bunx tsc --noEmit"
+  },
+  "dependencies": {
+    "hono": "^4.0.0",
+    "@octokit/rest": "^20.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0",
+    "@types/bun": "latest"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  }
+}
