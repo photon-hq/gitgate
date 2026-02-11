@@ -70,8 +70,8 @@ export class GitHubClient {
       }
 
       return null;
-    } catch {
-      console.warn("GitHub asset download failed");
+    } catch (error) {
+      console.warn("GitHub asset download failed:", error);
       return null;
     }
   }
