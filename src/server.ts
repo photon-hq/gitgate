@@ -59,7 +59,7 @@ export function createServer(config: Config): Hono {
   }
 
   app.onError((err, c) => {
-    console.error("Request failed");
+    console.error("Request failed:", err);
     if (err instanceof AppError) {
       return c.json({ error: err.message }, err.status);
     }
