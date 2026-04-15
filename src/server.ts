@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import type { Config } from "./types";
+import type { Config, DeviceContext } from "./types";
 import { authenticateDevice } from "./auth";
 import { GitHubClient } from "./github/client";
 import { GitGateCache, resolveCacheConfig } from "./cache";
@@ -35,7 +35,7 @@ export function createServer(config: Config): Hono {
   });
 
   const auditLogger = new AuditLogger(config.audit?.log_file);
-  const rateLimitLimit = 60;
+  const rateLimitLimit = config.rate_limit?.requests_per_minute ?? 60;
   const rateLimiter = new RateLimiter(rateLimitLimit);
   const corsAllowedOrigins = config.security?.cors?.allowed_origins || [];
   const corsAllowCredentials = config.security?.cors?.allow_credentials || false;
@@ -137,13 +137,11 @@ export function createServer(config: Config): Hono {
 
   function applyRateLimitHeaders(
     c: { header: (name: string, value: string) => void },
-    limit: number,
-    remaining: number,
-    resetAt: number,
+    info: { limit: number; remaining: number; reset_at: number },
   ): void {
-    c.header("X-RateLimit-Limit", limit.toString());
-    c.header("X-RateLimit-Remaining", remaining.toString());
-    c.header("X-RateLimit-Reset", Math.floor(resetAt / 1000).toString());
+    c.header("X-RateLimit-Limit", info.limit.toString());
+    c.header("X-RateLimit-Remaining", info.remaining.toString());
+    c.header("X-RateLimit-Reset", Math.floor(info.reset_at / 1000).toString());
   }
 
   function applyCacheHeaders(
@@ -152,6 +150,31 @@ export function createServer(config: Config): Hono {
     stale: boolean,
   ): void {
     c.header("X-Cache", hit ? (stale ? "STALE" : "HIT") : "MISS");
+  }
+
+  function resolveDeviceKey(
+    device: DeviceContext | null,
+    headers: Record<string, string>,
+  ): string {
+    if (device) return device.device_id;
+    const ip = parseForwardedFor(headers["x-forwarded-for"]);
+    return `anon:${ip}`;
+  }
+
+  function enforceRateLimit(
+    c: { header: (name: string, value: string) => void },
+    deviceKey: string,
+  ): boolean {
+    const result = rateLimiter.consume(deviceKey);
+    applyRateLimitHeaders(c, result);
+    return result.allowed;
+  }
+
+  function showRateLimitHeaders(
+    c: { header: (name: string, value: string) => void },
+    deviceKey: string,
+  ): void {
+    applyRateLimitHeaders(c, rateLimiter.check(deviceKey));
   }
 
   app.get("/releases/:owner/:repo", async (c) => {
@@ -170,13 +193,8 @@ export function createServer(config: Config): Hono {
     );
 
     if (!device) {
-      const anonKey = parseForwardedFor(headers["x-forwarded-for"]);
-      const anonId = `anon:${anonKey}`;
-      const anonAllowed = rateLimiter.isAllowed(anonId);
-      const anonRemaining = rateLimiter.getRemainingRequests(anonId);
-      const anonReset = rateLimiter.getResetTime(anonId);
-      applyRateLimitHeaders(c, rateLimitLimit, anonRemaining, anonReset);
-      if (!anonAllowed) {
+      const deviceKey = resolveDeviceKey(null, headers);
+      if (!enforceRateLimit(c, deviceKey)) {
         return c.json({ error: "Rate limited" }, 429);
       }
       auditLogger.logAction(
@@ -187,34 +205,44 @@ export function createServer(config: Config): Hono {
       );
       return c.json({ error: "Unauthorized" }, 401);
     }
-    const allowed = rateLimiter.isAllowed(device.device_id);
-    const remaining = rateLimiter.getRemainingRequests(device.device_id);
-    const resetAt = rateLimiter.getResetTime(device.device_id);
-    applyRateLimitHeaders(c, rateLimitLimit, remaining, resetAt);
-    if (!allowed) {
-      auditLogger.logAction(
-        device.device_id,
-        "list_releases",
-        `${owner}/${repo}`,
-        "failure",
-        { reason: "rate_limited" },
-      );
-      throw new RateLimitError("Rate limited");
-    }
 
+    const deviceKey = device.device_id;
     const cacheKey = `releases:${owner}:${repo}`;
     const cached = cache.get(cacheKey);
 
     if (cached && !cached.stale) {
+      showRateLimitHeaders(c, deviceKey);
       applyCacheHeaders(c, true, false);
       auditLogger.logAction(
-        device.device_id,
+        deviceKey,
         "list_releases",
         `${owner}/${repo}`,
         "success",
         { cached: true },
       );
       return c.json(JSON.parse(cached.data.toString("utf-8")));
+    }
+
+    if (!enforceRateLimit(c, deviceKey)) {
+      if (cached) {
+        applyCacheHeaders(c, true, true);
+        auditLogger.logAction(
+          deviceKey,
+          "list_releases",
+          `${owner}/${repo}`,
+          "success",
+          { cached: true, stale: true, rate_limited: true },
+        );
+        return c.json(JSON.parse(cached.data.toString("utf-8")));
+      }
+      auditLogger.logAction(
+        deviceKey,
+        "list_releases",
+        `${owner}/${repo}`,
+        "failure",
+        { reason: "rate_limited" },
+      );
+      throw new RateLimitError("Rate limited");
     }
 
     try {
@@ -228,7 +256,7 @@ export function createServer(config: Config): Hono {
           lastModified: cached.meta.last_modified,
         });
         auditLogger.logAction(
-          device.device_id,
+          deviceKey,
           "list_releases",
           `${owner}/${repo}`,
           "success",
@@ -241,7 +269,7 @@ export function createServer(config: Config): Hono {
         if (cached) {
           applyCacheHeaders(c, true, true);
           auditLogger.logAction(
-            device.device_id,
+            deviceKey,
             "list_releases",
             `${owner}/${repo}`,
             "success",
@@ -251,7 +279,7 @@ export function createServer(config: Config): Hono {
         }
 
         auditLogger.logAction(
-          device.device_id,
+          deviceKey,
           "list_releases",
           `${owner}/${repo}`,
           "failure",
@@ -269,7 +297,7 @@ export function createServer(config: Config): Hono {
 
       applyCacheHeaders(c, false, false);
       auditLogger.logAction(
-        device.device_id,
+        deviceKey,
         "list_releases",
         `${owner}/${repo}`,
         "success",
@@ -280,7 +308,7 @@ export function createServer(config: Config): Hono {
       if (staleEntry) {
         applyCacheHeaders(c, true, true);
         auditLogger.logAction(
-          device.device_id,
+          deviceKey,
           "list_releases",
           `${owner}/${repo}`,
           "success",
@@ -310,13 +338,8 @@ export function createServer(config: Config): Hono {
     );
 
     if (!device) {
-      const anonKey = parseForwardedFor(headers["x-forwarded-for"]);
-      const anonId = `anon:${anonKey}`;
-      const anonAllowed = rateLimiter.isAllowed(anonId);
-      const anonRemaining = rateLimiter.getRemainingRequests(anonId);
-      const anonReset = rateLimiter.getResetTime(anonId);
-      applyRateLimitHeaders(c, rateLimitLimit, anonRemaining, anonReset);
-      if (!anonAllowed) {
+      const deviceKey = resolveDeviceKey(null, headers);
+      if (!enforceRateLimit(c, deviceKey)) {
         return c.json({ error: "Rate limited" }, 429);
       }
       auditLogger.logAction(
@@ -327,25 +350,13 @@ export function createServer(config: Config): Hono {
       );
       return c.json({ error: "Unauthorized" }, 401);
     }
-    const allowed = rateLimiter.isAllowed(device.device_id);
-    const remaining = rateLimiter.getRemainingRequests(device.device_id);
-    const resetAt = rateLimiter.getResetTime(device.device_id);
-    applyRateLimitHeaders(c, rateLimitLimit, remaining, resetAt);
-    if (!allowed) {
-      auditLogger.logAction(
-        device.device_id,
-        "download_asset",
-        `${owner}/${repo}/${version}/${assetName}`,
-        "failure",
-        { reason: "rate_limited" },
-      );
-      throw new RateLimitError("Rate limited");
-    }
 
+    const deviceKey = device.device_id;
     const cacheKey = `asset:${owner}:${repo}:${version}:${assetName}`;
     const cached = cache.get(cacheKey);
 
     if (cached && !cached.stale) {
+      showRateLimitHeaders(c, deviceKey);
       applyCacheHeaders(c, true, false);
       c.header("X-Checksum-SHA256", cached.meta.checksum);
 
@@ -355,7 +366,7 @@ export function createServer(config: Config): Hono {
       }
 
       auditLogger.logAction(
-        device.device_id,
+        deviceKey,
         "download_asset",
         `${owner}/${repo}/${version}/${assetName}`,
         "success",
@@ -363,6 +374,31 @@ export function createServer(config: Config): Hono {
       );
       c.header("Content-Type", "application/octet-stream");
       return new Response(cached.data);
+    }
+
+    if (!enforceRateLimit(c, deviceKey)) {
+      if (cached) {
+        applyCacheHeaders(c, true, true);
+        c.header("X-Checksum-SHA256", cached.meta.checksum);
+        if (assetSigner) c.header("X-Signature-RSA-SHA256", assetSigner.sign(cached.data));
+        auditLogger.logAction(
+          deviceKey,
+          "download_asset",
+          `${owner}/${repo}/${version}/${assetName}`,
+          "success",
+          { cached: true, stale: true, rate_limited: true },
+        );
+        c.header("Content-Type", "application/octet-stream");
+        return new Response(cached.data);
+      }
+      auditLogger.logAction(
+        deviceKey,
+        "download_asset",
+        `${owner}/${repo}/${version}/${assetName}`,
+        "failure",
+        { reason: "rate_limited" },
+      );
+      throw new RateLimitError("Rate limited");
     }
 
     try {
@@ -378,7 +414,7 @@ export function createServer(config: Config): Hono {
         c.header("X-Checksum-SHA256", cached.meta.checksum);
         if (assetSigner) c.header("X-Signature-RSA-SHA256", assetSigner.sign(cached.data));
         auditLogger.logAction(
-          device.device_id,
+          deviceKey,
           "download_asset",
           `${owner}/${repo}/${version}/${assetName}`,
           "success",
@@ -398,7 +434,7 @@ export function createServer(config: Config): Hono {
         }
 
         auditLogger.logAction(
-          device.device_id,
+          deviceKey,
           "download_asset",
           `${owner}/${repo}/${version}/${assetName}`,
           "failure",
@@ -411,7 +447,7 @@ export function createServer(config: Config): Hono {
 
       if (!asset) {
         auditLogger.logAction(
-          device.device_id,
+          deviceKey,
           "download_asset",
           `${owner}/${repo}/${version}/${assetName}`,
           "failure",
@@ -433,7 +469,7 @@ export function createServer(config: Config): Hono {
         }
 
         auditLogger.logAction(
-          device.device_id,
+          deviceKey,
           "download_asset",
           `${owner}/${repo}/${version}/${assetName}`,
           "failure",
@@ -453,7 +489,7 @@ export function createServer(config: Config): Hono {
       }
 
       auditLogger.logAction(
-        device.device_id,
+        deviceKey,
         "download_asset",
         `${owner}/${repo}/${version}/${assetName}`,
         "success",
@@ -468,7 +504,7 @@ export function createServer(config: Config): Hono {
         if (assetSigner) c.header("X-Signature-RSA-SHA256", assetSigner.sign(staleEntry.data));
         c.header("Content-Type", "application/octet-stream");
         auditLogger.logAction(
-          device.device_id,
+          deviceKey,
           "download_asset",
           `${owner}/${repo}/${version}/${assetName}`,
           "success",

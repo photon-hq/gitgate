@@ -32,6 +32,9 @@ export interface Config {
       require_client_cert: boolean;
     };
   };
+  rate_limit?: {
+    requests_per_minute?: number;
+  };
   signing?: {
     enabled: boolean;
     private_key_path?: string;
