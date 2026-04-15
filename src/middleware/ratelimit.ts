@@ -89,6 +89,23 @@ export class RateLimiter {
     return this.consumeInternal(deviceId).allowed;
   }
 
+  check(deviceId: string): { allowed: boolean; limit: number; remaining: number; reset_at: number } {
+    const now = Date.now();
+    const state = this.limits.get(deviceId);
+    const limit = this.requestsPerMinute;
+
+    if (!state || now > state.reset_at) {
+      return { allowed: true, limit, remaining: limit, reset_at: now + 60000 };
+    }
+
+    if (state.blocked_until && now < state.blocked_until) {
+      return { allowed: false, limit, remaining: 0, reset_at: state.blocked_until };
+    }
+
+    const remaining = Math.max(0, limit - state.requests);
+    return { allowed: remaining > 0, limit, remaining, reset_at: state.reset_at };
+  }
+
   getRemainingRequests(deviceId: string): number {
     const now = Date.now();
     const state = this.limits.get(deviceId);

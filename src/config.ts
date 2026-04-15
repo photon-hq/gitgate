@@ -77,6 +77,12 @@ function loadFromEnv(): Config | null {
     };
   }
 
+  if (process.env.RATE_LIMIT_REQUESTS_PER_MINUTE) {
+    config.rate_limit = {
+      requests_per_minute: safeParseInt(process.env.RATE_LIMIT_REQUESTS_PER_MINUTE, 60),
+    };
+  }
+
   if (process.env.SIGNING_ENABLED) {
     config.signing = {
       enabled: parseBoolean(process.env.SIGNING_ENABLED),
