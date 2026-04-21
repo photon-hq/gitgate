@@ -253,7 +253,19 @@ export function createServer(config: Config): Hono {
     }
 
     try {
-      const result = await githubClient.listReleases(owner, repo);
+      let result = await githubClient.listReleases(owner, repo);
+
+      if (result.notModified && !cached) {
+        // Orphan ETag: our conditional request returned 304, but we no longer
+        // have the body in the memory cache (e.g. evicted under LRU pressure
+        // while the longer-lived ETag survived). Dropping the ETag and
+        // refetching unconditionally avoids poisoning the cache with an
+        // empty [] response.
+        cache.invalidateETag(cacheKey);
+        result = await githubClient.listReleases(owner, repo, 30, {
+          skipConditional: true,
+        });
+      }
 
       if (result.notModified && cached) {
         applyCacheHeaders(c, true, false);
@@ -409,7 +421,16 @@ export function createServer(config: Config): Hono {
     }
 
     try {
-      const releaseResult = await githubClient.getRelease(owner, repo, version);
+      let releaseResult = await githubClient.getRelease(owner, repo, version);
+
+      if (releaseResult.notModified && !cached) {
+        // Orphan ETag on release metadata while asset bytes were evicted.
+        // Refetch unconditionally so we don't return a bogus 404.
+        cache.invalidateETag(`release:${owner}:${repo}:${version}`);
+        releaseResult = await githubClient.getRelease(owner, repo, version, {
+          skipConditional: true,
+        });
+      }
 
       if (releaseResult.notModified && cached) {
         cache.set(cacheKey, cached.data, {

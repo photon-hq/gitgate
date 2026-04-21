@@ -6,10 +6,13 @@ export interface MemoryCacheEntry {
   meta: CacheMeta;
 }
 
+export type MemoryCacheDisposeReason = "evict" | "set" | "delete" | "expire" | "fetch";
+
 export interface MemoryCacheOptions {
   maxItems: number;
   maxSizeBytes: number;
   defaultTTLMs: number;
+  onDispose?: (key: string, reason: MemoryCacheDisposeReason) => void;
 }
 
 const DEFAULT_OPTIONS: MemoryCacheOptions = {
@@ -27,6 +30,7 @@ export class MemoryCache {
   constructor(opts: Partial<MemoryCacheOptions> = {}) {
     const options = { ...DEFAULT_OPTIONS, ...opts };
     this.maxSizeBytes = options.maxSizeBytes;
+    const onDispose = options.onDispose;
 
     this.cache = new LRUCache<string, MemoryCacheEntry>({
       max: options.maxItems,
@@ -35,6 +39,16 @@ export class MemoryCache {
       ttl: options.defaultTTLMs,
       allowStale: true,
       updateAgeOnGet: true,
+      dispose: onDispose
+        ? (_value, key, reason) => {
+            // Propagate eviction/expiration so associated state (e.g. ETags)
+            // can be invalidated in lockstep with the cached body. We skip
+            // "set" because it fires on replacement, where the caller is
+            // refreshing the entry and will provide a new ETag anyway.
+            if (reason === "set") return;
+            onDispose(key, reason as MemoryCacheDisposeReason);
+          }
+        : undefined,
     });
   }
 
