@@ -41,13 +41,21 @@ export class GitGateCache {
     this.config = config;
     this.startedAt = Date.now();
 
+    this.etagStore = new ETagStore();
+
     this.memory = new MemoryCache({
       maxItems: config.max_items,
       maxSizeBytes: config.max_mb * 1024 * 1024,
       defaultTTLMs: config.metadata_ttl_seconds * 1000,
+      // Keep the ETag store in lockstep with the body cache. If a body is
+      // evicted/expired but its ETag survives, the next request sends
+      // If-None-Match, gets a legitimate 304 from GitHub, and the handler
+      // has no cached payload to serve — poisoning the cache with an empty
+      // response. Purging the ETag alongside the body forces a full refetch.
+      onDispose: (key) => {
+        this.etagStore.delete(key);
+      },
     });
-
-    this.etagStore = new ETagStore();
   }
 
   get(key: string): CacheGetResult | null {
@@ -121,6 +129,10 @@ export class GitGateCache {
 
   getETag(key: string) {
     return this.etagStore.get(key);
+  }
+
+  invalidateETag(key: string): void {
+    this.etagStore.delete(key);
   }
 
   get etags(): ETagStore {

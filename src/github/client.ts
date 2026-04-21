@@ -28,9 +28,12 @@ export class GitHubClient {
     owner: string,
     repo: string,
     tag: string,
+    opts: { skipConditional?: boolean } = {},
   ): Promise<{ release: Release | null; etag?: string; lastModified?: string; notModified: boolean }> {
     const cacheKey = `release:${owner}:${repo}:${tag}`;
-    const conditionalHeaders = this.buildConditionalHeaders(cacheKey);
+    const conditionalHeaders = opts.skipConditional
+      ? {}
+      : this.buildConditionalHeaders(cacheKey);
     const isConditional = Object.keys(conditionalHeaders).length > 0;
 
     return this.withRetry(async () => {
@@ -75,9 +78,12 @@ export class GitHubClient {
     owner: string,
     repo: string,
     limit: number = 30,
+    opts: { skipConditional?: boolean } = {},
   ): Promise<{ releases: Release[]; etag?: string; lastModified?: string; notModified: boolean }> {
     const cacheKey = `releases:${owner}:${repo}`;
-    const conditionalHeaders = this.buildConditionalHeaders(cacheKey);
+    const conditionalHeaders = opts.skipConditional
+      ? {}
+      : this.buildConditionalHeaders(cacheKey);
     const isConditional = Object.keys(conditionalHeaders).length > 0;
 
     return this.withRetry(async () => {
