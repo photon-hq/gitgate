@@ -79,7 +79,16 @@ Environment variables take precedence over the config file.
 Set these environment variables for configuration:
 
 ```bash
-GITHUB_TOKEN=ghp_your_fine_grained_pat_here
+GITHUB_AUTH_MODE=app
+GITHUB_APP_ID=123456
+GITHUB_APP_INSTALLATION_ID=987654
+GITHUB_APP_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
+# Or mount the private key as a file:
+# GITHUB_APP_PRIVATE_KEY_PATH=/var/run/secrets/gitgate/github-app-private-key.pem
+
+# Static token fallback. Prefer GitHub App auth for production.
+# GITHUB_AUTH_MODE=token
+# GITHUB_TOKEN=github_pat_your_fine_grained_pat_here
 AUTH_METHOD=tailscale
 
 GITGATE_PORT=3000
@@ -114,7 +123,9 @@ AUDIT_LOG_FILE=./logs/audit.log
 ```
 
 **Required variables:**
-- `GITHUB_TOKEN`: GitHub personal access token
+- GitHub auth, either:
+  - `GITHUB_AUTH_MODE=app` with `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, and `GITHUB_APP_PRIVATE_KEY` or `GITHUB_APP_PRIVATE_KEY_PATH`
+  - `GITHUB_AUTH_MODE=token` with `GITHUB_TOKEN`
 - `AUTH_METHOD`: One of `jamf`, `tailscale`, `mtls`, or `none`
 
 **Auth-method-specific variables:**
@@ -172,9 +183,16 @@ Alternatively, create `config.json` based on `config.example.json`:
 
 ### GitHub Token Requirements
 
-Generate a fine-grained personal access token with:
+Production deployments should use a GitHub App instead of a long-lived personal
+access token. Install the app only on repositories GitGate should serve, grant
+read-only repository contents access, and configure GitGate with the app ID,
+installation ID, and private key. GitGate exchanges the private key for
+short-lived installation access tokens at runtime and refreshes them before
+expiry.
+
+If you must use `GITHUB_TOKEN`, generate a fine-grained personal access token
+with:
 - Read access to repository contents
-- Read access to releases
 
 Public repositories require no special permissions.
 

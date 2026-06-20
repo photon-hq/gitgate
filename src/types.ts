@@ -12,7 +12,14 @@ export interface Config {
   port: number;
   host: string;
   github: {
-    token: string;
+    auth_mode?: "token" | "app";
+    token?: string;
+    app?: {
+      app_id: string;
+      installation_id: string;
+      private_key?: string;
+      private_key_path?: string;
+    };
     cache_dir: string;
     cache_ttl_seconds: number;
     cache?: Partial<CacheConfig>;

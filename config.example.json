@@ -2,7 +2,12 @@
   "port": 3000,
   "host": "0.0.0.0",
   "github": {
-    "token": "ghp_your_fine_grained_pat_here",
+    "auth_mode": "app",
+    "app": {
+      "app_id": "123456",
+      "installation_id": "987654",
+      "private_key_path": "/var/run/secrets/gitgate/github-app-private-key.pem"
+    },
     "cache_dir": "./cache",
     "cache_ttl_seconds": 3600,
     "cache": {

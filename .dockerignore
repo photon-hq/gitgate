@@ -1,0 +1,9 @@
+.git
+.github
+node_modules
+dist
+cache
+logs
+.env
+.env.*
+config.json
