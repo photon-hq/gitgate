@@ -18,6 +18,7 @@ interface InstallationTokenResponse {
 }
 
 const TOKEN_REFRESH_SKEW_MS = 5 * 60 * 1000;
+const INSTALLATION_TOKEN_TIMEOUT_MS = 10_000;
 
 function base64Url(input: string | Buffer): string {
   return Buffer.from(input)
@@ -43,6 +44,7 @@ export class GitHubAppAuthProvider implements GitHubAuthProvider {
   private readonly privateKey: string;
   private cachedToken: string | null = null;
   private cachedTokenExpiresAt = 0;
+  private refreshPromise: Promise<string> | null = null;
 
   constructor(private readonly opts: GitHubAppAuthOptions) {
     if (opts.privateKey) {
@@ -65,18 +67,48 @@ export class GitHubAppAuthProvider implements GitHubAuthProvider {
       return this.cachedToken;
     }
 
+    if (this.refreshPromise) {
+      return this.refreshPromise;
+    }
+
+    this.refreshPromise = this.refreshToken();
+    try {
+      return await this.refreshPromise;
+    } finally {
+      this.refreshPromise = null;
+    }
+  }
+
+  private async refreshToken(): Promise<string> {
     const jwt = this.createJwt();
-    const response = await fetch(
-      `https://api.github.com/app/installations/${this.opts.installationId}/access_tokens`,
-      {
-        method: "POST",
-        headers: {
-          Accept: "application/vnd.github+json",
-          Authorization: `Bearer ${jwt}`,
-          "X-GitHub-Api-Version": "2022-11-28",
-        },
-      },
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () => controller.abort(),
+      INSTALLATION_TOKEN_TIMEOUT_MS,
     );
+    let response: Response;
+
+    try {
+      response = await fetch(
+        `https://api.github.com/app/installations/${this.opts.installationId}/access_tokens`,
+        {
+          method: "POST",
+          headers: {
+            Accept: "application/vnd.github+json",
+            Authorization: `Bearer ${jwt}`,
+            "X-GitHub-Api-Version": "2022-11-28",
+          },
+          signal: controller.signal,
+        },
+      );
+    } catch (error) {
+      if (controller.signal.aborted) {
+        throw new Error("Timed out creating GitHub App installation token");
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
 
     if (!response.ok) {
       const body = await response.text();
@@ -108,4 +140,3 @@ export class GitHubAppAuthProvider implements GitHubAuthProvider {
     return `${unsigned}.${base64Url(signer.sign(this.privateKey))}`;
   }
 }
-

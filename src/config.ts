@@ -17,7 +17,18 @@ function safeParseInt(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function hasEnvVar(key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(process.env, key);
+}
+
 function loadFromEnv(): Config | null {
+  const hasAnyGithubAuthEnv =
+    hasEnvVar("GITHUB_AUTH_MODE") ||
+    hasEnvVar("GITHUB_TOKEN") ||
+    hasEnvVar("GITHUB_APP_ID") ||
+    hasEnvVar("GITHUB_APP_INSTALLATION_ID") ||
+    hasEnvVar("GITHUB_APP_PRIVATE_KEY") ||
+    hasEnvVar("GITHUB_APP_PRIVATE_KEY_PATH");
   const hasGithubToken = Boolean(process.env.GITHUB_TOKEN);
   const hasGithubAppConfig = Boolean(
     process.env.GITHUB_APP_ID &&
@@ -25,16 +36,32 @@ function loadFromEnv(): Config | null {
       (process.env.GITHUB_APP_PRIVATE_KEY ||
         process.env.GITHUB_APP_PRIVATE_KEY_PATH),
   );
-  const hasRequiredVars =
-    Boolean(process.env.AUTH_METHOD) && (hasGithubToken || hasGithubAppConfig);
 
-  if (!hasRequiredVars) {
+  if (!hasAnyGithubAuthEnv && !hasEnvVar("AUTH_METHOD")) {
     return null;
+  }
+
+  if (!process.env.AUTH_METHOD) {
+    throw new ConfigError("AUTH_METHOD is required when using environment variables");
   }
 
   const githubAuthMode = process.env.GITHUB_AUTH_MODE || (
     hasGithubAppConfig ? "app" : "token"
   );
+
+  if (githubAuthMode !== "token" && githubAuthMode !== "app") {
+    throw new ConfigError("Invalid GitHub auth mode");
+  }
+
+  if (githubAuthMode === "token" && !hasGithubToken) {
+    throw new ConfigError("GITHUB_TOKEN is required for token auth mode");
+  }
+
+  if (githubAuthMode === "app" && !hasGithubAppConfig) {
+    throw new ConfigError(
+      "GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID, and a GitHub App private key are required for app auth mode",
+    );
+  }
 
   const config: Config = {
     port: parseInt(process.env.GITGATE_PORT || "3000", 10),
@@ -173,8 +200,12 @@ export function validateConfig(config: Config): boolean {
     throw new ConfigError("Invalid host value");
   }
 
+  if (!config.github || typeof config.github !== "object") {
+    throw new ConfigError("GitHub configuration is required");
+  }
+
   const githubAuthMode =
-    config.github?.auth_mode || (config.github?.token ? "token" : "app");
+    config.github.auth_mode || (config.github.token ? "token" : "app");
 
   if (githubAuthMode !== "token" && githubAuthMode !== "app") {
     throw new ConfigError("Invalid GitHub auth mode");
@@ -182,12 +213,12 @@ export function validateConfig(config: Config): boolean {
 
   config.github.auth_mode = githubAuthMode;
 
-  if (githubAuthMode === "token" && !config.github?.token) {
+  if (githubAuthMode === "token" && !config.github.token) {
     throw new ConfigError("GitHub token is required");
   }
 
   if (githubAuthMode === "app") {
-    if (!config.github?.app?.app_id || !config.github.app.installation_id) {
+    if (!config.github.app?.app_id || !config.github.app.installation_id) {
       throw new ConfigError("GitHub App ID and installation ID are required");
     }
 
