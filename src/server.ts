@@ -2,6 +2,10 @@ import { Hono } from "hono";
 import type { Config, DeviceContext } from "./types";
 import { authenticateDevice } from "./auth";
 import { GitHubClient } from "./github/client";
+import {
+  GitHubAppAuthProvider,
+  StaticGitHubAuthProvider,
+} from "./github/auth";
 import { GitGateCache, resolveCacheConfig } from "./cache";
 import { AssetSigner } from "./github/signing";
 import { AuditLogger } from "./audit/logger";
@@ -27,9 +31,18 @@ export function createServer(config: Config): Hono {
   const cacheConfig = resolveCacheConfig(config.github.cache, config.github.cache_ttl_seconds);
 
   const cache = new GitGateCache(cacheConfig);
+  const githubAuth =
+    config.github.auth_mode === "app" && config.github.app
+      ? new GitHubAppAuthProvider({
+          appId: config.github.app.app_id,
+          installationId: config.github.app.installation_id,
+          privateKey: config.github.app.private_key,
+          privateKeyPath: config.github.app.private_key_path,
+        })
+      : new StaticGitHubAuthProvider(config.github.token!);
 
   const githubClient = new GitHubClient({
-    token: config.github.token,
+    auth: githubAuth,
     etagStore: cacheConfig.enable_etags ? cache.etags : undefined,
     onRateLimitUpdate: (info) => cache.updateRateLimitInfo(info),
   });

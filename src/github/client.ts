@@ -1,9 +1,10 @@
 import { Octokit } from "@octokit/rest";
 import type { Release, GitHubRateLimitInfo } from "../types";
 import type { ETagStore } from "../cache/etag-store";
+import type { GitHubAuthProvider } from "./auth";
 
 export interface GitHubClientOptions {
-  token: string;
+  auth: GitHubAuthProvider;
   etagStore?: ETagStore;
   onRateLimitUpdate?: (info: GitHubRateLimitInfo) => void;
 }
@@ -14,12 +15,12 @@ const MAX_RETRIES = 3;
 const RETRY_BASE_MS = 1000;
 
 export class GitHubClient {
-  private octokit: Octokit;
+  private auth: GitHubAuthProvider;
   private etagStore: ETagStore | null;
   private onRateLimitUpdate: ((info: GitHubRateLimitInfo) => void) | null;
 
   constructor(opts: GitHubClientOptions) {
-    this.octokit = new Octokit({ auth: opts.token, request: { timeout: 30000 } });
+    this.auth = opts.auth;
     this.etagStore = opts.etagStore ?? null;
     this.onRateLimitUpdate = opts.onRateLimitUpdate ?? null;
   }
@@ -38,7 +39,8 @@ export class GitHubClient {
 
     return this.withRetry(async () => {
       try {
-        const response = await this.octokit.repos.getReleaseByTag({
+        const octokit = await this.getOctokit();
+        const response = await octokit.repos.getReleaseByTag({
           owner,
           repo,
           tag,
@@ -88,7 +90,8 @@ export class GitHubClient {
 
     return this.withRetry(async () => {
       try {
-        const response = await this.octokit.repos.listReleases({
+        const octokit = await this.getOctokit();
+        const response = await octokit.repos.listReleases({
           owner,
           repo,
           per_page: limit,
@@ -131,7 +134,8 @@ export class GitHubClient {
   ): Promise<Buffer | null> {
     return this.withRetry(async () => {
       try {
-        const response = await this.octokit.repos.getReleaseAsset({
+        const octokit = await this.getOctokit();
+        const response = await octokit.repos.getReleaseAsset({
           owner,
           repo,
           asset_id: assetId,
@@ -166,6 +170,13 @@ export class GitHubClient {
     if (entry.lastModified) headers["if-modified-since"] = entry.lastModified;
     if (entry.etag) headers["if-none-match"] = entry.etag;
     return headers;
+  }
+
+  private async getOctokit(): Promise<Octokit> {
+    return new Octokit({
+      auth: await this.auth.getToken(),
+      request: { timeout: 30000 },
+    });
   }
 
   private storeETag(cacheKey: string, headers: Record<string, string | undefined>): void {

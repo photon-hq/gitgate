@@ -18,18 +18,30 @@ function safeParseInt(value: string | undefined, fallback: number): number {
 }
 
 function loadFromEnv(): Config | null {
-  const requiredEnvVars = ["GITHUB_TOKEN", "AUTH_METHOD"];
-  const hasRequiredVars = requiredEnvVars.every((key) => process.env[key]);
+  const hasGithubToken = Boolean(process.env.GITHUB_TOKEN);
+  const hasGithubAppConfig = Boolean(
+    process.env.GITHUB_APP_ID &&
+      process.env.GITHUB_APP_INSTALLATION_ID &&
+      (process.env.GITHUB_APP_PRIVATE_KEY ||
+        process.env.GITHUB_APP_PRIVATE_KEY_PATH),
+  );
+  const hasRequiredVars =
+    Boolean(process.env.AUTH_METHOD) && (hasGithubToken || hasGithubAppConfig);
 
   if (!hasRequiredVars) {
     return null;
   }
 
+  const githubAuthMode = process.env.GITHUB_AUTH_MODE || (
+    hasGithubAppConfig ? "app" : "token"
+  );
+
   const config: Config = {
     port: parseInt(process.env.GITGATE_PORT || "3000", 10),
     host: process.env.GITGATE_HOST || "0.0.0.0",
     github: {
-      token: process.env.GITHUB_TOKEN!,
+      auth_mode: githubAuthMode as "token" | "app",
+      token: process.env.GITHUB_TOKEN,
       cache_dir: process.env.GITHUB_CACHE_DIR || "./cache",
       cache_ttl_seconds: parseInt(
         process.env.GITHUB_CACHE_TTL_SECONDS || "3600",
@@ -53,6 +65,15 @@ function loadFromEnv(): Config | null {
         | "none",
     },
   };
+
+  if (githubAuthMode === "app") {
+    config.github.app = {
+      app_id: process.env.GITHUB_APP_ID || "",
+      installation_id: process.env.GITHUB_APP_INSTALLATION_ID || "",
+      private_key: process.env.GITHUB_APP_PRIVATE_KEY,
+      private_key_path: process.env.GITHUB_APP_PRIVATE_KEY_PATH,
+    };
+  }
 
   if (config.auth.method === "jamf") {
     config.auth.jamf = {
@@ -142,6 +163,8 @@ export function getConfig(): Config {
 }
 
 export function validateConfig(config: Config): boolean {
+  const baseDir = process.cwd();
+
   if (!config.port || config.port < 1 || config.port > 65535) {
     throw new ConfigError("Invalid port number");
   }
@@ -150,15 +173,44 @@ export function validateConfig(config: Config): boolean {
     throw new ConfigError("Invalid host value");
   }
 
-  if (!config.github?.token) {
+  const githubAuthMode =
+    config.github?.auth_mode || (config.github?.token ? "token" : "app");
+
+  if (githubAuthMode !== "token" && githubAuthMode !== "app") {
+    throw new ConfigError("Invalid GitHub auth mode");
+  }
+
+  config.github.auth_mode = githubAuthMode;
+
+  if (githubAuthMode === "token" && !config.github?.token) {
     throw new ConfigError("GitHub token is required");
+  }
+
+  if (githubAuthMode === "app") {
+    if (!config.github?.app?.app_id || !config.github.app.installation_id) {
+      throw new ConfigError("GitHub App ID and installation ID are required");
+    }
+
+    if (!config.github.app.private_key && !config.github.app.private_key_path) {
+      throw new ConfigError("GitHub App private key is required");
+    }
+
+    if (config.github.app.private_key_path) {
+      const keyPath = resolveSafePath(
+        baseDir,
+        config.github.app.private_key_path,
+      );
+      if (!keyPath) {
+        throw new ConfigError("Invalid GitHub App private key path");
+      }
+      config.github.app.private_key_path = keyPath;
+    }
   }
 
   if (!config.github?.cache_dir) {
     throw new ConfigError("Cache directory is required");
   }
 
-  const baseDir = process.cwd();
   const cacheDir = resolveSafePath(baseDir, config.github.cache_dir);
   if (!cacheDir) {
     throw new ConfigError("Invalid cache directory");
