@@ -2,6 +2,7 @@ import type { DeviceContext } from "../types";
 import { authenticateJamf } from "./jamf";
 import { authenticateTailscale } from "./tailscale";
 import { authenticateMTLS } from "./mtls";
+import { isNoAuthAllowed } from "./no-auth";
 
 export async function authenticateDevice(
   method: string,
@@ -17,6 +18,14 @@ export async function authenticateDevice(
     case "mtls":
       return authenticateMTLS(clientCert, config);
     case "none":
+      // "none" auth method is only allowed when explicitly opted in via
+      // ALLOW_NO_AUTH=true AND NODE_ENV !== "production".
+      // This prevents accidental unauthenticated deployments.
+      const allowNoAuth = process.env.ALLOW_NO_AUTH === "true";
+      const isProduction = process.env.NODE_ENV === "production";
+      if (!allowNoAuth || isProduction) {
+        return null; // Fail closed: treat as invalid auth method
+      }
       return {
         device_id: "unknown",
         auth_method: "none",

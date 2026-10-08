@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import type { Config } from "./types";
 import { ConfigError } from "./utils/errors";
 import { resolveSafePath, validateHttpsUrl } from "./utils/validation";
+import { isNoAuthAllowed } from "./auth/no-auth";
 
 let cachedConfig: Config | null = null;
 
@@ -250,6 +251,17 @@ export function validateConfig(config: Config): boolean {
 
   if (!config.auth?.method) {
     throw new ConfigError("Auth method is required");
+  }
+
+  // "none" auth method is only allowed when explicitly opted in via
+  // ALLOW_NO_AUTH=true AND NODE_ENV !== "production".
+  // This prevents accidental unauthenticated deployments.
+  const allowNoAuth = process.env.ALLOW_NO_AUTH === "true";
+  const isProduction = process.env.NODE_ENV === "production";
+  if (config.auth.method === "none" && (!allowNoAuth || isProduction)) {
+    throw new ConfigError(
+      'Auth method "none" is not allowed. Set ALLOW_NO_AUTH=true (non-production only) to enable.'
+    );
   }
 
   if (config.auth.method === "jamf") {
