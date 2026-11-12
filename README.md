@@ -296,4 +296,4 @@ Key dependencies: Hono (web framework), Octokit (GitHub API client), lru-cache (
 
 ## License
 
-MIT License
+Apache License 2.0
